@@ -99,3 +99,12 @@ npm test
 ## 배포 (GitHub Pages)
 
 저장소 Settings → Pages → Source: **Deploy from a branch**, Branch: **main** / **/(root)**.
+
+## 라이선스
+
+[MIT](LICENSE) © 2026 wisebear — 자유롭게 쓰고 고치고 배포해도 되지만, **있는 그대로(AS IS) 제공되며 어떤 보증도 책임도 지지 않습니다.**
+
+네이버·치지직과 무관한 비공식 프로젝트입니다. 공개되지 않은 치지직 API 와 제3자 서비스에 기대고 있어 예고 없이 동작이 멈출 수 있고,
+사용에 따른 책임(치지직 이용약관 준수 포함)은 사용하는 분에게 있습니다.
+
+수식 렌더링에 쓰는 [KaTeX](https://github.com/KaTeX/KaTeX)(MIT)는 저장소에 포함하지 않고 실행 시 CDN 에서 불러옵니다.

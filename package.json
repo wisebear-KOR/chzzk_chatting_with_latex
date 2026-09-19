@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "치지직(CHZZK) 기본 채팅 위젯과 같은 모양에 LaTeX 수식 렌더링을 더한 OBS용 단일 HTML 채팅 위젯",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "main": "server.js",
   "scripts": {
