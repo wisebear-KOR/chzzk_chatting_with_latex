@@ -23,6 +23,8 @@
     --bubble-bg: #000000e5;
     --bubble-radius: 14px;
     --bubble-max-width: 520px;
+    /* 말풍선 높이 상한. 6행 행렬이 들어갈 정도. 이 밖은 그리지 않고, 수식이 넘치면 원문 글자로 대체한다. */
+    --bubble-max-height: 340px;
     --text-color: #fff;
     --brand-color: #00ffa3;
     --badge-size: 28px;
@@ -65,6 +67,7 @@
     background: var(--bubble-bg);
   }
   .wrapper {
+    max-height: var(--bubble-max-height);
     padding: 8px 13px;
     overflow: hidden;
     font-size: var(--chat-font-size);
@@ -127,7 +130,6 @@
   .math-inline .katex-inner { display: inline; }
   .math-display {
     display: block;
-    max-height: 340px;
     margin: 6px 0 4px;
     overflow: hidden;
     text-align: center;
@@ -757,9 +759,10 @@
     }
   }
 
-  function buildMessage(msg, chatChannelId) {
+  // forcePlain: 수식 없이 글자로만 (렌더링 결과가 말풍선 상한을 넘쳤을 때 다시 그리는 용도)
+  function buildMessage(msg, chatChannelId, forcePlain) {
     var isDonation = msg.type === TYPE.DONATION;
-    var parsed = ChzzkLatex.parseMessage(msg.text, { emojis: msg.extras.emojis, detect: config.detect, isValid: isValidMath });
+    var parsed = ChzzkLatex.parseMessage(msg.text, { emojis: msg.extras.emojis, detect: forcePlain ? 'off' : config.detect, isValid: isValidMath });
 
     var item = h('div', 'chat-item' + (parsed.hasMath ? ' has-math' : ''));
     item.dataset.key = msg.key;
@@ -851,9 +854,22 @@
         return;
       }
       chatEl.insertBefore(item, chatEl.firstChild); // column-reverse: 첫 번째 자식이 맨 아래
-      if (item.classList.contains('has-math')) fitMath(item);
+      if (item.classList.contains('has-math')) {
+        fitMath(item);
+        // \raisebox{-100em} 처럼 KaTeX 가 허용하는 음수 치수로 말풍선을 화면 밖까지 늘리는 장난 방지.
+        // 원인(명령/매크로)을 가려내는 대신 실제로 그려진 크기를 재서, 상한을 넘치면 수식 없이 글자로만 다시 그린다.
+        if (overflowsBubble(item)) {
+          log('math overflowed the bubble, falling back to plain text:', msg.text);
+          chatEl.replaceChild(buildMessage(msg, currentCid, true), item);
+        }
+      }
     });
     while (chatEl.children.length > limit) chatEl.lastElementChild.remove();
+  }
+
+  function overflowsBubble(item) {
+    var wrapper = item.querySelector('.wrapper');
+    return wrapper.scrollHeight > wrapper.clientHeight + 1;
   }
 
   function removeMessage(uid, time) {
@@ -1177,6 +1193,8 @@
   async function main() {
     var hasSource = config.hash || config.channel || config.chatChannelId;
     if (!config.demo && !hasSource) return startSetup();
+    // ?debug 일 때만: 콘솔에서 임의 채팅을 밀어 넣어 볼 수 있다 (실시간 페이로드 형식 그대로)
+    if (config.debug) window.__chzzkLatexDebug = { enqueue: enqueue, clear: clearMessages };
 
     if (config.detect !== 'off') {
       var ok = await loadKatex();

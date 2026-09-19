@@ -80,7 +80,10 @@ https://wisebear-kor.github.io/chzzk_chatting_with_latex/?hash=<위젯 URL 끝�
 
 - KaTeX `trust: false` — `\href`, `\url`, `\includegraphics`, `\htmlStyle` 등은 수식으로 그리지 않고 원문 그대로 표시
 - `maxSize`, `maxExpand` 로 거대한 상자·매크로 폭탄 차단, 매크로는 메시지끼리 공유하지 않음
-- 메시지당 수식 8개, 수식 높이 340px 까지
+- 말풍선 크기 상한(너비 520px, 높이 340px = CSS 변수 `--bubble-max-height`) 밖은 그리지 않음.
+  `\raisebox{-100em}{x}` 처럼 KaTeX 가 허용하는 음수 치수로 말풍선을 화면 밖까지 늘리는 장난은,
+  명령을 걸러 내는 대신 **실제로 그려진 크기를 재서** 상한을 넘치면 수식 없이 원문 글자로 다시 그림 (매크로로 숫자를 숨겨도 통하지 않음)
+- 메시지당 수식 8개
 - 채팅 글자는 전부 `textContent` 로만 넣고, 이모티콘 이미지는 치지직과 같은 호스트만 허용
 - KaTeX 는 버전을 고정한 CDN(jsDelivr → 실패 시 unpkg)에서 SRI 무결성 검사와 함께 불러옴
 
