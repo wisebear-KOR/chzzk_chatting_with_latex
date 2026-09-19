@@ -1,0 +1,1204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>치지직 LaTeX 채팅 위젯</title>
+<!--
+  치지직(CHZZK) 기본 채팅 위젯과 같은 모양 + 채팅 속 LaTeX 수식 렌더링.
+  서버 없이 이 파일 하나로 동작한다 (GitHub Pages 등 정적 호스팅, OBS 브라우저 소스용).
+
+  사용법:  index.html?hash=<치지직 채팅 위젯 URL 맨 끝의 32자리 값>
+  파라미터 없이 열면 URL 변환 안내 화면이 나온다.  데모: index.html?demo=1
+-->
+<style>
+  :root {
+    --chat-font: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "맑은 고딕", Helvetica, Arial, sans-serif;
+    --chat-font-size: 24px;
+    --chat-line-height: 32px;
+    --bubble-bg: #000000e5;
+    --bubble-radius: 14px;
+    --bubble-max-width: 520px;
+    --text-color: #fff;
+    --brand-color: #00ffa3;
+    --badge-size: 28px;
+    --emoji-size: 48px;
+    /* LaTeX 전용 스타일 */
+    --math-accent: #00ffa3;
+    --math-bubble-bg: linear-gradient(140deg, rgba(10, 14, 22, .95), rgba(5, 28, 22, .95));
+    --math-color: #fff;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    overflow: hidden;
+    background: transparent;
+    font-family: var(--chat-font);
+    font-size: 14px;
+    line-height: 1.2;
+  }
+  img { border: 0; vertical-align: top; }
+  em { font-style: normal; }
+  [hidden] { display: none !important; }
+
+  /* ---- 채팅 목록: 공식 위젯과 동일한 배치 (아래에서 위로 쌓이고 위쪽은 서서히 사라짐) ---- */
+  .chat-list {
+    position: relative;
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    height: 100vh;
+    margin: 0 auto;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 70px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 70px);
+  }
+  .chat-item { flex: none; max-width: 100%; margin-bottom: 12px; }
+  .bubble {
+    max-width: var(--bubble-max-width);
+    border-radius: var(--bubble-radius);
+    background: var(--bubble-bg);
+  }
+  .wrapper {
+    padding: 8px 13px;
+    overflow: hidden;
+    font-size: var(--chat-font-size);
+    line-height: var(--chat-line-height);
+    word-break: break-all;
+    overflow-wrap: anywhere;
+  }
+
+  .name { display: inline-block; margin-right: 6px; }
+  .badges {
+    position: relative;
+    display: inline-flex;
+    flex-wrap: wrap;
+    margin: 2px 6px 0 0;
+    line-height: var(--badge-size);
+    vertical-align: top;
+  }
+  .badge { width: var(--badge-size); height: var(--badge-size); }
+  .badge + .badge { margin-left: 6px; }
+  .badge img { display: block; width: 100%; height: 100%; }
+  .badges + .nickname { margin-left: 2px; }
+  .nickname { font-weight: 500; }
+  .nickname.has-gradient { -webkit-background-clip: text; background-clip: text; color: transparent !important; }
+  .nickname .highlight { margin: -2px; padding: 2px; border-radius: 4px; }
+  .verified {
+    display: inline-block;
+    width: 26px;
+    height: 26px;
+    margin: 3px 0 0 4px;
+    vertical-align: top;
+    background: url(https://ssl.pstatic.net/static/nng/glive/image/icon_official_mark.png) 50% / cover no-repeat;
+  }
+
+  .text { color: var(--text-color); }
+  .text em { color: var(--brand-color); }
+  .text .emoji { width: var(--emoji-size); height: var(--emoji-size); margin: 4px 0 4px 6px; }
+
+  /* ---- LaTeX 가 들어 있는 채팅의 전용 스타일 ---- */
+  .chat-item.has-math .bubble {
+    min-width: 260px;
+    background: var(--math-bubble-bg);
+    box-shadow: inset 0 0 0 1.5px rgba(0, 255, 163, .5);
+  }
+  .math-head { display: flex; align-items: center; justify-content: space-between; }
+  .math-head .name { min-width: 0; margin-right: 0; }
+  .math-tag {
+    flex: none;
+    margin-left: 14px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    line-height: 22px;
+    color: var(--math-accent);
+    background: rgba(0, 255, 163, .12);
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 163, .4);
+  }
+  .math-tag .katex { font-size: 1em; }
+  .math-body { margin-top: 4px; line-height: 1.55; }
+  .math-inline, .math-display { color: var(--math-color); }
+  .math-inline .katex-inner { display: inline; }
+  .math-display {
+    display: block;
+    max-height: 340px;
+    margin: 6px 0 4px;
+    overflow: hidden;
+    text-align: center;
+  }
+  .math-display .katex-inner { display: inline-block; white-space: nowrap; }
+  .math-display .katex-display { display: inline-block; margin: 0; }
+  .math-display .katex-display > .katex { display: inline-block; }
+
+  /* ---- 상태 표시 (문제가 있을 때만 보임) ---- */
+  .status {
+    position: fixed;
+    left: 8px;
+    bottom: 8px;
+    z-index: 10;
+    max-width: calc(100% - 16px);
+    padding: 7px 11px;
+    border-radius: 9px;
+    font-size: 14px;
+    line-height: 1.4;
+    color: #fff;
+    background: rgba(0, 0, 0, .8);
+  }
+
+  /* ---- 안내(설정) 화면: 파라미터 없이 열었을 때 ---- */
+  body.is-setup { overflow: auto; color: #e9ecf1; background: #101317; }
+  .setup { max-width: 760px; margin: 0 auto; padding: 48px 20px 64px; font-size: 16px; line-height: 1.65; }
+  .setup h1 { margin: 0 0 6px; font-size: 28px; line-height: 1.3; }
+  .setup h1 span { color: var(--brand-color); }
+  .setup h2 { margin: 36px 0 10px; font-size: 18px; }
+  .setup p { margin: 8px 0; color: #b6bdc9; }
+  .setup ol, .setup ul { margin: 8px 0; padding-left: 22px; color: #b6bdc9; }
+  .setup code { padding: 1px 6px; border-radius: 5px; font-size: .92em; color: #e9ecf1; background: #232830; }
+  .setup label { display: block; margin: 18px 0 6px; font-weight: 600; }
+  .setup input[type="text"] {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #333a45;
+    border-radius: 10px;
+    outline: none;
+    font: inherit;
+    color: #fff;
+    background: #181c22;
+  }
+  .setup input[type="text"]:focus { border-color: var(--brand-color); }
+  .setup .row { display: flex; }
+  .setup .row input { min-width: 0; border-radius: 10px 0 0 10px; }
+  .setup button {
+    flex: none;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 0 10px 10px 0;
+    font: inherit;
+    font-weight: 700;
+    color: #06130e;
+    background: var(--brand-color);
+    cursor: pointer;
+  }
+  .setup button:disabled { opacity: .4; cursor: default; }
+  .setup .hint { min-height: 1.65em; font-size: 14px; color: #ff8d8d; }
+  .setup .hint.ok { color: var(--brand-color); }
+  .setup a { color: var(--brand-color); }
+  .setup table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  .setup th, .setup td { padding: 8px 10px; border-bottom: 1px solid #262c35; text-align: left; vertical-align: top; }
+  .setup th { color: #8f98a6; font-weight: 600; white-space: nowrap; }
+  .setup td { color: #b6bdc9; }
+</style>
+</head>
+<body>
+<div id="chat" class="chat-list" aria-live="off"></div>
+<div id="status" class="status" hidden></div>
+
+<main id="setup" class="setup" hidden>
+  <h1>치지직 <span>LaTeX</span> 채팅 위젯</h1>
+  <p>치지직 기본 채팅 위젯과 같은 모양인데, 채팅에 LaTeX 문법이 있으면 수식으로 그려 줍니다.</p>
+
+  <label for="src-url">1. 치지직 채팅 위젯 URL 붙여넣기</label>
+  <input id="src-url" type="text" spellcheck="false" autocomplete="off"
+         placeholder="https://chzzk.naver.com/chat/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+  <p id="src-hint" class="hint"></p>
+
+  <label for="out-url">2. 아래 주소를 OBS 브라우저 소스 URL 에 넣기</label>
+  <div class="row">
+    <input id="out-url" type="text" readonly spellcheck="false">
+    <button id="copy" type="button" disabled>복사</button>
+  </div>
+  <p><a id="demo-link" href="?demo=1">데모 미리보기</a> · 위젯 URL 은 치지직 스튜디오의 채팅 위젯 설정에서 복사할 수 있습니다.</p>
+
+  <h2>수식 쓰는 법 (시청자)</h2>
+  <table>
+    <tr><th><code>$ ... $</code></th><td>문장 안 수식. 예: <code>오일러 공식 $e^{i\pi}+1=0$</code></td></tr>
+    <tr><th><code>$$ ... $$</code></th><td>가운데 정렬된 큰 수식. <code>\( \)</code>, <code>\[ \]</code> 도 됩니다.</td></tr>
+    <tr><th>구분자 없이</th><td><code>\frac</code>, <code>\sqrt</code> 같은 LaTeX 명령이 있으면 자동 감지합니다. 예: <code>답은 \frac{1}{2} 입니다</code></td></tr>
+    <tr><th>화학식</th><td><code>\ce{2H2 + O2 -&gt; 2H2O}</code></td></tr>
+  </table>
+  <p>수식만 보낸 채팅은 자동으로 큰 수식으로 표시됩니다. 잘못된 문법은 그냥 원래 글자로 보입니다.</p>
+
+  <h2>URL 옵션</h2>
+  <table>
+    <tr><th><code>hash</code></th><td>치지직 채팅 위젯 URL 끝의 32자리 값 (URL 전체를 넣어도 됩니다)</td></tr>
+    <tr><th><code>detect</code></th><td><code>auto</code>(기본) · <code>delimiter</code>(<code>$</code> 등 구분자로 감싼 것만) · <code>off</code></td></tr>
+    <tr><th><code>demo=1</code></th><td>가짜 채팅으로 모양 미리보기</td></tr>
+    <tr><th><code>chatChannelId</code></th><td>자동 조회가 안 될 때 직접 지정 (방송을 켤 때마다 바뀌는 값)</td></tr>
+  </table>
+</main>
+
+<!-- ======================================================================
+     LaTeX 감지 (순수 함수, DOM 을 쓰지 않는다. test/latex.test.js 가 이 블록만 떼어 검증한다)
+     ====================================================================== -->
+<script id="latex-core">
+(function (root) {
+  'use strict';
+
+  // 구분자 없이도 수식으로 볼 단서: \명령(영문 2자 이상) 또는 ^{ _{
+  // ^^ ^_^ T_T 같은 이모티콘 때문에 맨 ^ 와 _ 는 단서로 치지 않는다.
+  var TRIGGER = /\\[A-Za-z]{2,}|[\^_]\{/;
+  // 중괄호 밖에 나오면 수식이 거기서 끊기는 문자 (한글, 가나, 한자, 전각, 이모지 등)
+  var BOUNDARY = /[ᄀ-ᇿ　-ヿ㄰-㆏㐀-䶿一-鿿가-힯豈-﫿＀-￯\uD800-\uDFFF]/;
+  var PROSE = /^[("'\[]*[A-Za-z]{2,}(?:['’\-][A-Za-z]+)*[)"'\].,!?;:~]*$/;
+  var DIFFERENTIAL = /^d[a-z]$/;
+  var EDGE_PUNCT = /^[.,!?~;:…]+$/;
+  var MAX_MATH_PER_MESSAGE = 8;
+
+  function text(value) { return { type: 'text', value: value }; }
+
+  // {:이름:} 이모티콘 토큰 분리. 목록에 없는 이름은 글자 그대로 둔다.
+  function splitEmojis(message, emojis) {
+    var out = [], last = 0, re = /\{:(\w+):\}/g, m;
+    while ((m = re.exec(message))) {
+      if (typeof emojis[m[1]] !== 'string') continue;
+      if (m.index > last) out.push(text(message.slice(last, m.index)));
+      out.push({ type: 'emoji', name: m[1], url: emojis[m[1]] });
+      last = m.index + m[0].length;
+    }
+    if (last < message.length) out.push(text(message.slice(last)));
+    return out;
+  }
+
+  function findClose(str, from, close) {
+    var j = from;
+    while (j < str.length) {
+      if (str.startsWith(close, j)) return j;
+      j += str[j] === '\\' ? 2 : 1;
+    }
+    return -1;
+  }
+
+  // "$5 그리고 $10" 같은 금액 표기를 수식으로 오인하지 않기 위한 규칙 (Pandoc 과 동일):
+  // 여는 $ 바로 뒤와 닫는 $ 바로 앞은 공백이 아니어야 하고, 닫는 $ 뒤에 숫자가 오면 안 된다.
+  function findInlineDollarClose(str, open) {
+    var first = str[open + 1];
+    if (first === undefined || first === '$' || /\s/.test(first)) return -1;
+    var j = open + 1;
+    while (j < str.length) {
+      if (str[j] === '\\') { j += 2; continue; }
+      if (str[j] === '$' && !/\s/.test(str[j - 1]) && !/[0-9]/.test(str[j + 1] || '')) return j;
+      j++;
+    }
+    return -1;
+  }
+
+  // $$..$$  \[..\]  \(..\)  $..$ 로 감싼 구간을 나눈다. (KaTeX 검증은 하지 않는다)
+  function splitDelimited(str) {
+    var out = [], buf = '', i = 0;
+    function math(end, openLen, closeLen, display) {
+      if (buf) { out.push(text(buf)); buf = ''; }
+      out.push({ type: 'math', raw: str.slice(i, end + closeLen), tex: str.slice(i + openLen, end), display: display });
+      i = end + closeLen;
+    }
+    while (i < str.length) {
+      var ch = str[i], next = str[i + 1], end;
+      if (ch === '\\') {
+        if (next === '[' || next === '(') {
+          end = findClose(str, i + 2, next === '[' ? '\\]' : '\\)');
+          if (end !== -1 && str.slice(i + 2, end).trim()) { math(end, 2, 2, next === '['); continue; }
+        }
+        buf += str.slice(i, i + 2); // \$ 같은 이스케이프는 통째로 넘긴다
+        i += 2;
+        continue;
+      }
+      if (ch === '$') {
+        if (next === '$') {
+          end = findClose(str, i + 2, '$$');
+          if (end !== -1 && str.slice(i + 2, end).trim()) { math(end, 2, 2, true); continue; }
+          buf += '$$';
+          i += 2;
+          continue;
+        }
+        end = findInlineDollarClose(str, i);
+        if (end !== -1) { math(end, 1, 1, false); continue; }
+      }
+      buf += ch;
+      i++;
+    }
+    if (buf) out.push(text(buf));
+    return out;
+  }
+
+  // 공백과 BOUNDARY 문자로 토큰을 나누되, {...} 와 \begin..\end 안쪽은 한 덩어리로 둔다.
+  // 그래서 "속력=\frac{거리}{시간}임" 에서 "=\frac{거리}{시간}" 이 한 토큰이 된다.
+  function tokenize(str) {
+    var tokens = [], depth = 0, env = 0, start = -1, i = 0;
+    function close(end) {
+      if (start >= 0) tokens.push({ start: start, end: end, text: str.slice(start, end) });
+      start = -1;
+    }
+    while (i < str.length) {
+      var c = str[i];
+      if (c === '\\') {
+        if (start < 0) start = i;
+        if (str.startsWith('\\begin{', i)) env++;
+        else if (env > 0 && str.startsWith('\\end{', i)) env--;
+        i += 2;
+        continue;
+      }
+      if (depth === 0 && env === 0 && (/\s/.test(c) || BOUNDARY.test(c))) { close(i); i++; continue; }
+      if (start < 0) start = i;
+      if (c === '{') depth++;
+      else if (c === '}' && depth > 0) depth--;
+      i++;
+    }
+    close(str.length);
+    return tokens;
+  }
+
+  function isProse(token) { return PROSE.test(token) && !DIFFERENTIAL.test(token); }
+
+  // inline 으로 되면 false, display 에서만 되면(align 등) true, 둘 다 안 되면 null
+  function validMode(tex, preferDisplay, isValid) {
+    if (preferDisplay) return isValid(tex, true) ? true : null;
+    if (isValid(tex, false)) return false;
+    return isValid(tex, true) ? true : null;
+  }
+
+  // 구분자 없는 LaTeX 자동 감지.
+  // 단서(TRIGGER)가 있는 토큰을 중심으로, 공백만 사이에 둔 "수식스러운" 토큰들을 한 수식으로 묶는다.
+  // 영어 단어(PROSE)나 한글을 만나면 거기서 끊는다. 묶음이 KaTeX 에서 실패하면 토큰 단위로 다시 시도한다.
+  function detectAuto(str, isValid) {
+    if (!TRIGGER.test(str)) return [text(str)];
+
+    var groups = [], cur = null;
+    tokenize(str).forEach(function (tok) {
+      if (isProse(tok.text)) { cur = null; return; }
+      if (cur && /^\s*$/.test(str.slice(cur[cur.length - 1].end, tok.start))) cur.push(tok);
+      else groups.push((cur = [tok]));
+    });
+
+    var spans = [];
+    groups.forEach(function (group) {
+      while (group.length && EDGE_PUNCT.test(group[0].text)) group.shift();
+      while (group.length && EDGE_PUNCT.test(group[group.length - 1].text)) group.pop();
+      if (!group.some(function (tok) { return TRIGGER.test(tok.text); })) return;
+
+      var first = group[0], last = group[group.length - 1];
+      var tex = str.slice(first.start, last.end);
+      var display = validMode(tex, false, isValid);
+      if (display !== null) { spans.push({ start: first.start, end: last.end, display: display }); return; }
+      if (group.length === 1) return;
+      group.forEach(function (tok) {
+        if (!TRIGGER.test(tok.text)) return;
+        var d = validMode(tok.text, false, isValid);
+        if (d !== null) spans.push({ start: tok.start, end: tok.end, display: d });
+      });
+    });
+
+    var out = [], pos = 0;
+    spans.forEach(function (s) {
+      if (s.start > pos) out.push(text(str.slice(pos, s.start)));
+      var raw = str.slice(s.start, s.end);
+      out.push({ type: 'math', raw: raw, tex: raw, display: s.display });
+      pos = s.end;
+    });
+    if (pos < str.length) out.push(text(str.slice(pos)));
+    return out;
+  }
+
+  // 채팅 한 건 -> [{type:'text'|'emoji'|'math', ...}]
+  //   options.emojis   {이름: URL}
+  //   options.detect   'auto' | 'delimiter' | 'off'
+  //   options.isValid  (tex, displayMode) => boolean   (KaTeX 로 실제 렌더링이 되는지)
+  function parseMessage(message, options) {
+    options = options || {};
+    var detect = options.detect || 'auto';
+    var isValid = options.isValid;
+    var segments = [];
+
+    splitEmojis(String(message == null ? '' : message), options.emojis || {}).forEach(function (piece) {
+      if (piece.type !== 'text' || detect === 'off' || typeof isValid !== 'function') { segments.push(piece); return; }
+      splitDelimited(piece.value).forEach(function (seg) {
+        if (seg.type === 'math') {
+          var display = validMode(seg.tex, seg.display, isValid);
+          segments.push(display === null ? text(seg.raw) : { type: 'math', raw: seg.raw, tex: seg.tex, display: display });
+        } else if (detect === 'auto') {
+          Array.prototype.push.apply(segments, detectAuto(seg.value, isValid));
+        } else {
+          segments.push(seg);
+        }
+      });
+    });
+
+    var mathCount = 0, merged = [];
+    segments.forEach(function (seg) {
+      if (seg.type === 'math' && ++mathCount > MAX_MATH_PER_MESSAGE) seg = text(seg.raw);
+      var prev = merged[merged.length - 1];
+      if (seg.type === 'text' && prev && prev.type === 'text') prev.value += seg.value;
+      else merged.push(seg);
+    });
+
+    // 수식 하나만 달랑 보낸 채팅은 큰 수식(display)으로 보여 준다.
+    var maths = merged.filter(function (s) { return s.type === 'math'; });
+    var onlyMath = merged.every(function (s) { return s.type === 'math' || (s.type === 'text' && !s.value.trim()); });
+    if (maths.length === 1 && onlyMath) maths[0].display = true;
+
+    return { segments: merged, hasMath: maths.length > 0 };
+  }
+
+  root.ChzzkLatex = {
+    parseMessage: parseMessage,
+    splitDelimited: splitDelimited,
+    detectAuto: detectAuto,
+    tokenize: tokenize,
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+</script>
+
+<!-- ======================================================================
+     위젯 본체
+     ====================================================================== -->
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- 설정
+  var params = new URLSearchParams(location.search);
+
+  function hex32(value) {
+    var m = /[0-9a-f]{32}/i.exec(value || '');
+    return m ? m[0].toLowerCase() : '';
+  }
+  function httpsUrl(value) {
+    try {
+      var u = new URL(value);
+      var local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+      return u.protocol === 'https:' || (u.protocol === 'http:' && local) ? u.href.replace(/\/+$/, '') : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  var config = {
+    // 치지직 채팅 위젯 URL(https://chzzk.naver.com/chat/<해시>)의 해시. URL 전체를 넣어도 된다.
+    hash: hex32(params.get('hash')),
+    // 채널 ID 로도 조회할 수 있다 (19세 방송은 해시만 가능)
+    channel: hex32(params.get('channel')),
+    // 자동 조회를 건너뛰고 직접 지정. 방송을 켤 때마다 새로 발급되는 값이라 임시 방편이다.
+    chatChannelId: /^[A-Za-z0-9_-]{1,64}$/.test(params.get('chatChannelId') || '') ? params.get('chatChannelId') : '',
+    // proxy/worker.js 를 직접 배포했다면 그 주소. 공개 중계 서비스보다 먼저 쓴다.
+    proxy: httpsUrl(params.get('proxy')),
+    detect: ['auto', 'delimiter', 'off'].indexOf(params.get('detect')) >= 0 ? params.get('detect') : 'auto',
+    demo: params.has('demo') && params.get('demo') !== '0',
+    debug: params.has('debug'),
+  };
+
+  var log = config.debug ? console.log.bind(console, '[chzzk-latex]') : function () {};
+
+  // 채팅 채널 재조회 주기. 공개 중계 서비스(r.jina.ai: IP당 분당 20회)에 부담을 주지 않는 선.
+  var POLL_INTERVAL_MS = 20000;
+  var FETCH_TIMEOUT_MS = 9000;
+  var FLUSH_INTERVAL_MS = 200;
+
+  var chatEl = document.getElementById('chat');
+  var statusEl = document.getElementById('status');
+
+  // ---------------------------------------------------------------- KaTeX 로딩 (CDN, 무결성 검사)
+  var KATEX_CDNS = ['https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/', 'https://unpkg.com/katex@0.18.7/dist/'];
+  var KATEX_FILES = {
+    css: ['katex.min.css', 'sha384-JctiRyLzXCrSoOOzFlSoWLdyzQl7OrrRnhyeBmzB6ZWtcjccUyc8lCQJqIbs3uQX'],
+    js: ['katex.min.js', 'sha384-+7Keh381hSkXmXqnjC0JBM/kzsN6TFj+wMKychSLjTvJ8/0ElMde2uKl8i6p6Buj'],
+    mhchem: ['contrib/mhchem.min.js', 'sha384-fB8BH//9nBzROkMUsu/Dr35jWHIbnKesUo9rW0hfEgw8mZGnkAyBAjKX9F98OVuo'],
+  };
+
+  function loadTag(tagName, base, file) {
+    return new Promise(function (resolve, reject) {
+      var el = document.createElement(tagName);
+      el.integrity = file[1];
+      el.crossOrigin = 'anonymous';
+      el.onload = resolve;
+      el.onerror = function () { el.remove(); reject(new Error('load failed: ' + base + file[0])); };
+      if (tagName === 'link') { el.rel = 'stylesheet'; el.href = base + file[0]; }
+      else el.src = base + file[0];
+      document.head.appendChild(el);
+    });
+  }
+
+  async function loadKatex() {
+    for (var i = 0; i < KATEX_CDNS.length; i++) {
+      var base = KATEX_CDNS[i];
+      try {
+        await Promise.all([loadTag('link', base, KATEX_FILES.css), loadTag('script', base, KATEX_FILES.js)]);
+        await loadTag('script', base, KATEX_FILES.mhchem).catch(function () {}); // \ce{} 는 없어도 그만
+        return true;
+      } catch (err) {
+        log(err.message);
+      }
+    }
+    return false;
+  }
+
+  // ---------------------------------------------------------------- 수식 렌더링
+  // 채팅은 신뢰할 수 없는 입력이다: \href 등 trust 가 필요한 명령은 "실패"로 처리해 원문 그대로 보여 주고,
+  // 크기/매크로 확장에 상한을 둔다. 매크로는 메시지끼리 공유하지 않는다.
+  var mathCache = new Map();
+  var MATH_CACHE_MAX = 200;
+
+  function renderMath(tex, display) {
+    if (!window.katex || tex.length > 1000) return null;
+    var key = (display ? 'D' : 'I') + tex;
+    if (mathCache.has(key)) return mathCache.get(key);
+
+    var untrusted = false;
+    var html = null;
+    try {
+      html = window.katex.renderToString(tex, {
+        displayMode: display,
+        throwOnError: true,
+        strict: 'ignore',
+        output: 'html',
+        maxSize: 8,
+        maxExpand: 100,
+        trust: function () { untrusted = true; return false; },
+      });
+    } catch (err) {
+      html = null;
+    }
+    if (untrusted) html = null;
+
+    if (mathCache.size >= MATH_CACHE_MAX) mathCache.delete(mathCache.keys().next().value);
+    mathCache.set(key, html);
+    return html;
+  }
+
+  function isValidMath(tex, display) { return renderMath(tex, display) !== null; }
+
+  // 말풍선보다 넓은 수식은 글자 크기를 줄여 맞춘다 (OBS 에서는 스크롤할 수 없으므로).
+  function fitMath(root) {
+    var boxes = root.querySelectorAll('.math-display, .math-inline');
+    for (var i = 0; i < boxes.length; i++) {
+      var box = boxes[i];
+      var inner = box.firstElementChild;
+      if (!inner) continue;
+      inner.style.fontSize = '';
+      var avail, need;
+      if (box.classList.contains('math-display')) {
+        avail = box.clientWidth;
+        need = inner.offsetWidth;
+      } else {
+        // inline 수식은 KaTeX 가 연산자 위치에서 줄바꿈하므로, 쪼갤 수 없는 조각(.base)만 본다.
+        avail = box.parentElement.clientWidth;
+        need = 0;
+        var bases = inner.querySelectorAll('.base');
+        for (var b = 0; b < bases.length; b++) need = Math.max(need, bases[b].offsetWidth);
+      }
+      if (avail > 0 && need > avail) inner.style.fontSize = Math.max(0.45, avail / need) * 100 + '%';
+    }
+  }
+
+  // ---------------------------------------------------------------- 닉네임 색상 / 뱃지 (공식 위젯과 같은 규칙)
+  var NICK_PALETTE = ('#EEA05D.#EAA35F.#E98158.#E97F58.#E76D53.#E66D5F.#E16490.#E481AE.#E481AE.#D25FAC.#D263AE.#D66CB4.#D071B6.' +
+    '#AF71B5.#A96BB2.#905FAA.#B38BC2.#9D78B8.#8D7AB8.#7F68AE.#9F99C8.#717DC6.#7E8BC2.#5A90C0.#628DCC.#81A1CA.#ADD2DE.#83C5D6.' +
+    '#8BC8CB.#91CBC6.#83C3BB.#7DBFB2.#AAD6C2.#84C194.#92C896.#94C994.#9FCE8E.#A6D293.#ABD373.#BFDE73').split('.');
+
+  // 치트키/구독 전용 닉네임 색상 코드표 (api.chzzk.naver.com/service/v2/nickname/color/codes 의 다크 테마 값).
+  // 이 API 도 CORS 로 막혀 있어서 값을 내장한다. CD001~CD040 은 위 팔레트와 1:1 이라 계산으로 처리한다.
+  var NICK_CODES = {
+    CC001: { c: '#E2BE61' }, CC002: { c: '#ECA843' }, CC003: { c: '#EC8A43' }, CC004: { c: '#EA723D' }, CC005: { c: '#E56B79' },
+    CC006: { c: '#E68199' }, CC007: { c: '#E16CB5' }, CC008: { c: '#BC7ACC' }, CC009: { c: '#A983E7' }, CC010: { c: '#8B89E1' },
+    CC011: { c: '#7194EE' }, CC012: { c: '#7994D0' }, CC013: { c: '#71AAED' }, CC014: { c: '#5FB7E8' }, CC015: { c: '#80BDD3' },
+    CC016: { c: '#80D3CE' }, CC017: { c: '#99D3BA' }, CC018: { c: '#94D59A' }, CC019: { c: '#BBE69A' }, CC020: { c: '#CCE57D' },
+    SG001: { c: '#F3E659', end: '#FE7A86' }, SG002: { c: '#EEEC69', end: '#24D881' }, SG003: { c: '#6BE5AA', end: '#5DA8EC' },
+    SG004: { c: '#5DA8EC', end: '#D581FF' }, SG005: { c: '#D581FF', end: '#FF8183' },
+    SH001: { c: '#C9CEDC', bg: '#501916' }, SH002: { c: '#C9CEDC', bg: '#473508' }, SH003: { c: '#C9CEDC', bg: '#11411B' },
+    SH004: { c: '#C9CEDC', bg: '#0A305D' }, SH005: { c: '#C9CEDC', bg: '#3E1252' },
+    SS001: { c: 'transparent' }, // 스텔스: 닉네임을 숨긴다
+  };
+
+  function nicknameStyle(profile, chatChannelId, isDonation) {
+    if (isDonation) return { c: '#fff' };
+    if (profile.title && profile.title.color) return { c: profile.title.color };
+
+    var prop = profile.streamingProperty || {};
+    var code = prop.nicknameColor && prop.nicknameColor.colorCode;
+    if (code && NICK_CODES[code]) return NICK_CODES[code];
+    var cd = /^CD0(\d\d)$/.exec(code || '');
+    if (cd && NICK_PALETTE[cd[1] - 1]) return { c: NICK_PALETTE[cd[1] - 1] };
+
+    var seed = (profile.userIdHash || '') + (chatChannelId || '');
+    var sum = 0;
+    for (var i = 0; i < seed.length; i++) sum += seed.charCodeAt(i);
+    return { c: NICK_PALETTE[sum % NICK_PALETTE.length] };
+  }
+
+  function badgeUrls(profile) {
+    var prop = profile.streamingProperty || {};
+    var urls = [];
+    if (profile.badge) urls.push(profile.badge.imageUrl);
+    if (prop.realTimeDonationRanking) urls.push((prop.realTimeDonationRanking.badge || {}).imageUrl);
+    if (prop.subscription) urls.push((prop.subscription.badge || {}).imageUrl);
+
+    if (Array.isArray(profile.viewerBadges)) {
+      var list = profile.viewerBadges.filter(function (v) { return v && v.badge; });
+      if (list.length && 'activatedV2' in list[0]) list = list.filter(function (v) { return v.activatedV2; });
+      list.sort(function (a, b) {
+        if (a.badge.scope === b.badge.scope) return (a.order || 0) - (b.order || 0);
+        return a.badge.scope === 'CHANNEL' ? -1 : 1;
+      });
+      list.forEach(function (v) { urls.push(v.badge.imageUrl); });
+    } else if (Array.isArray(profile.activityBadges)) {
+      profile.activityBadges.forEach(function (b) { if (b && b.activated) urls.push(b.imageUrl); });
+    }
+    return urls.filter(isHttpsUrl).slice(0, 7);
+  }
+
+  function isHttpsUrl(url) { return typeof url === 'string' && /^https:\/\//i.test(url); }
+
+  // 이모티콘 이미지는 공식 클라이언트와 같은 호스트만 허용한다.
+  var EMOJI_HOSTS = ['https://ssl.pstatic.net/static/nng/glive/', 'https://nng-phinf.pstatic.net/', 'https://beta-nng.ssl.phinf.net/'];
+  function emojiSrc(url) {
+    if (!EMOJI_HOSTS.some(function (h) { return url.indexOf(h) === 0; })) return '';
+    if (url.indexOf('https://nng-phinf.pstatic.net/') !== 0) return url;
+    try {
+      var u = new URL(url);
+      return u.origin + u.pathname + '?type=f60_60';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // ---------------------------------------------------------------- DOM 만들기
+  function h(tag, className, textContent) {
+    var el = document.createElement(tag);
+    if (className) el.className = className;
+    if (textContent != null) el.textContent = textContent;
+    return el;
+  }
+
+  function buildName(profile, chatChannelId, isDonation) {
+    var name = h('span', 'name');
+    var urls = badgeUrls(profile);
+    if (urls.length) {
+      var badges = h('span', 'badges');
+      urls.forEach(function (url) {
+        var img = h('img');
+        img.alt = '';
+        img.src = url;
+        img.onerror = function () { if (img.parentNode) img.parentNode.remove(); };
+        h('span', 'badge').appendChild(img);
+        badges.appendChild(img.parentNode);
+      });
+      name.appendChild(badges);
+    }
+
+    var style = nicknameStyle(profile, chatChannelId, isDonation);
+    var nick = h('span', 'nickname');
+    nick.style.color = style.c;
+    if (style.end) {
+      nick.classList.add('has-gradient');
+      nick.style.backgroundImage = 'linear-gradient(to right, ' + style.c + ', ' + style.end + ')';
+    }
+    var label = h('span', style.bg ? 'highlight' : '', profile.nickname || '(알 수 없음)');
+    if (style.bg) label.style.backgroundColor = style.bg;
+    nick.appendChild(label);
+    if (profile.verifiedMark) nick.appendChild(h('i', 'verified'));
+    name.appendChild(nick);
+    return name;
+  }
+
+  function appendSegments(parent, segments) {
+    segments.forEach(function (seg) {
+      if (seg.type === 'text') {
+        parent.appendChild(document.createTextNode(seg.value));
+      } else if (seg.type === 'emoji') {
+        var src = emojiSrc(seg.url);
+        if (!src) return;
+        var img = h('img', 'emoji');
+        img.alt = '';
+        img.title = seg.name;
+        img.src = src;
+        parent.appendChild(img);
+      } else {
+        var html = renderMath(seg.tex, seg.display);
+        if (html === null) { parent.appendChild(document.createTextNode(seg.raw)); return; }
+        var inner = h('span', 'katex-inner');
+        inner.innerHTML = html; // KaTeX 가 만든 마크업 (trust:false, 입력은 모두 이스케이프됨)
+        h('span', seg.display ? 'math-display' : 'math-inline').appendChild(inner);
+        parent.appendChild(inner.parentNode);
+      }
+    });
+  }
+
+  function formatNumber(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+  // 후원/구독 채팅에서 닉네임 뒤, 본문 앞에 붙는 안내 문구 (공식 위젯 문구와 동일)
+  function appendLead(parent, msg) {
+    var ex = msg.extras;
+    var amount = ex.payAmount > 0 ? formatNumber(ex.payAmount) : '';
+    if (msg.type === TYPE.SUBSCRIPTION) {
+      parent.appendChild(document.createTextNode('님이 '));
+      if (ex.month > 0) parent.appendChild(h('em', '', ex.month + '개월'));
+      parent.appendChild(document.createTextNode(' 동안 구독 중이에요 🎉'));
+      parent.appendChild(h('br'));
+      return;
+    }
+    switch (ex.donationType) {
+      case 'CHAT':
+        parent.appendChild(document.createTextNode('님이 ' + amount + '치즈를 후원했습니다.'));
+        parent.appendChild(h('br'));
+        break;
+      case 'MISSION':
+      case 'MISSION_PARTICIPATION':
+        parent.appendChild(h('em', '', ex.missionDonationType === 'PARTICIPATION' ? '미션 상금 ' + amount + '치즈 추가' : amount + '치즈 미션'));
+        parent.appendChild(document.createTextNode(' '));
+        break;
+      case 'PARTY':
+        parent.appendChild(document.createTextNode((ex.partyName || '') + ' '));
+        parent.appendChild(h('em', '', '파티에 ' + amount + '치즈 후원'));
+        parent.appendChild(document.createTextNode(' '));
+        break;
+    }
+  }
+
+  function buildMessage(msg, chatChannelId) {
+    var isDonation = msg.type === TYPE.DONATION;
+    var parsed = ChzzkLatex.parseMessage(msg.text, { emojis: msg.extras.emojis, detect: config.detect, isValid: isValidMath });
+
+    var item = h('div', 'chat-item' + (parsed.hasMath ? ' has-math' : ''));
+    item.dataset.key = msg.key;
+    var wrapper = h('div', 'wrapper');
+    h('div', 'bubble').appendChild(wrapper);
+    item.appendChild(wrapper.parentNode);
+
+    var name = buildName(msg.profile, chatChannelId, isDonation);
+    var body = h(parsed.hasMath ? 'div' : 'span', 'text' + (parsed.hasMath ? ' math-body' : ''));
+    if (msg.type !== TYPE.TEXT) appendLead(body, msg);
+    appendSegments(body, parsed.segments);
+
+    if (parsed.hasMath) {
+      // 전용 스타일: 윗줄에 닉네임 + LaTeX 표식, 아랫줄에 본문/수식
+      var head = h('div', 'math-head');
+      var tag = h('span', 'math-tag');
+      tag.innerHTML = renderMath('\\LaTeX', false) || 'LaTeX';
+      head.appendChild(name);
+      head.appendChild(tag);
+      wrapper.appendChild(head);
+    } else {
+      wrapper.appendChild(name);
+    }
+    wrapper.appendChild(body);
+    return item;
+  }
+
+  // ---------------------------------------------------------------- 메시지 정규화 / 표시
+  var TYPE = { TEXT: 1, DONATION: 10, SUBSCRIPTION: 11 };
+  var ANONYMOUS = { nickname: '익명의 후원자', userIdHash: '', userRoleCode: '', verifiedMark: false };
+
+  function parseJson(value) {
+    if (!value || typeof value !== 'string') return value && typeof value === 'object' ? value : null;
+    try { return JSON.parse(value); } catch (e) { return null; }
+  }
+
+  // 실시간(93101: uid/msg/msgTime...)과 최근 목록(15101: userId/content/messageTime...)은 필드 이름이 다르다.
+  function normalize(raw) {
+    var live = raw.msgTime > 0;
+    var msg = {
+      uid: live ? raw.uid : raw.userId,
+      time: live ? raw.msgTime : raw.messageTime,
+      type: live ? raw.msgTypeCode : raw.messageTypeCode,
+      status: live ? raw.msgStatusType : raw.messageStatusType,
+      text: (live ? raw.msg : raw.content) || '',
+      extras: parseJson(raw.extras) || {},
+      profile: parseJson(raw.profile),
+    };
+    if (!(msg.time > 0) || msg.status !== 'NORMAL') return null; // 블라인드/클린봇 처리된 채팅은 공식 위젯도 숨긴다
+    if (msg.type !== TYPE.TEXT && msg.type !== TYPE.DONATION && msg.type !== TYPE.SUBSCRIPTION) return null;
+    if (msg.type === TYPE.DONATION) {
+      if (msg.extras.donationType === 'VIDEO') return null;
+      if (msg.extras.isAnonymous || msg.uid === 'anonymous') msg.profile = ANONYMOUS;
+    }
+    if (!msg.profile) msg.profile = { nickname: '(알 수 없음)' };
+    msg.key = msg.uid + '_' + msg.time;
+    return msg;
+  }
+
+  var queue = [];
+  var seenKeys = [];
+  var flushTimer = 0;
+  var currentCid = '';
+
+  // 공식 위젯과 같은 기준: 한 줄짜리 채팅(약 60px)이 화면을 채우는 개수만 유지한다.
+  function maxVisible() { return Math.max(1, Math.ceil(window.innerHeight / 60)); }
+
+  function enqueue(rawList) {
+    (rawList || []).forEach(function (raw) {
+      var msg = normalize(raw);
+      if (!msg || seenKeys.indexOf(msg.key) >= 0) return;
+      seenKeys.push(msg.key);
+      if (seenKeys.length > 500) seenKeys.shift();
+      queue.push(msg);
+    });
+    if (queue.length && !flushTimer) flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
+  }
+
+  function flush() {
+    flushTimer = 0;
+    var limit = maxVisible();
+    var batch = queue.splice(0).slice(-limit); // 폭주 시 화면 밖으로 바로 밀려날 채팅은 그리지 않는다
+    batch.forEach(function (msg) {
+      var item;
+      try {
+        item = buildMessage(msg, currentCid);
+      } catch (err) {
+        log('render failed', err);
+        return;
+      }
+      chatEl.insertBefore(item, chatEl.firstChild); // column-reverse: 첫 번째 자식이 맨 아래
+      if (item.classList.contains('has-math')) fitMath(item);
+    });
+    while (chatEl.children.length > limit) chatEl.lastElementChild.remove();
+  }
+
+  function removeMessage(uid, time) {
+    var key = uid + '_' + time;
+    queue = queue.filter(function (m) { return m.key !== key; });
+    for (var i = 0; i < chatEl.children.length; i++) {
+      if (chatEl.children[i].dataset.key === key) { chatEl.children[i].remove(); return; }
+    }
+  }
+
+  function clearMessages() {
+    queue = [];
+    seenKeys = [];
+    chatEl.textContent = '';
+  }
+
+  function refitAll() { fitMath(chatEl); }
+
+  // ---------------------------------------------------------------- 상태 표시
+  var statusTimer = 0;
+  function setStatus(message, delayMs) {
+    clearTimeout(statusTimer);
+    if (!message) { statusEl.hidden = true; return; }
+    statusTimer = setTimeout(function () {
+      statusEl.textContent = message;
+      statusEl.hidden = false;
+    }, delayMs || 0);
+  }
+
+  // ---------------------------------------------------------------- 채팅 채널(chatChannelId) 조회
+  // 위젯 해시 -> chatChannelId 를 알려 주는 치지직 API 는 chzzk.naver.com 밖에서 부르면
+  // 403 "Invalid CORS request" 로 거절된다. 그래서 CORS 헤더를 붙여 주는 중계를 거쳐 읽는다.
+  // chatChannelId 는 방송을 켤 때마다 새로 발급되므로 주기적으로 다시 조회한다.
+  var CHZZK_API = 'https://api.chzzk.naver.com';
+  // 중계마다 응답을 감싸는 형식이 달라서(JSON 문자열 안의 JSON 등) 본문에서 값만 찾는다.
+  var ID_IN_BODY = /\\?"chatChannelId\\?"\s*:\s*\\?"([A-Za-z0-9_-]{1,64})\\?"/;
+  var UPSTREAM_ANSWERED = /\\?"code\\?"\s*:\s*\d+/; // 치지직 API 의 응답 봉투({"code":..})가 보이면 중계는 제 할 일을 한 것
+  var RELAYS = [
+    { name: 'r.jina.ai', wrap: function (target) { return 'https://r.jina.ai/' + target; } },
+    { name: 'allorigins', wrap: function (target) { return 'https://api.allorigins.win/get?disableCache=true&url=' + encodeURIComponent(target); } },
+  ];
+  var preferredTarget = 0;
+
+  async function fetchText(url) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT_MS);
+    try {
+      var res = await fetch(url, { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.text();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function sourceTargets() {
+    var bust = '?_=' + Date.now(); // 중계 쪽 캐시에 걸리지 않게
+    var targets = [];
+    if (config.hash) targets.push(CHZZK_API + '/manage/v1/chats/sources/' + config.hash + bust);
+    // hash 자리에 채널 ID 를 넣은 경우도 받아 준다
+    targets.push(CHZZK_API + '/polling/v3.1/channels/' + (config.channel || config.hash) + '/live-status' + bust);
+    if (preferredTarget) targets.push.apply(targets, targets.splice(0, preferredTarget));
+    return targets;
+  }
+
+  async function lookupChatChannelId() {
+    if (config.proxy) {
+      try {
+        var m = ID_IN_BODY.exec(await fetchText(config.proxy + '/chat-source/' + (config.hash || config.channel)));
+        if (m) return m[1];
+      } catch (err) {
+        log('proxy failed', err.message);
+      }
+    }
+    for (var r = 0; r < RELAYS.length; r++) {
+      var targets = sourceTargets();
+      var answered = false;
+      for (var t = 0; t < targets.length; t++) {
+        try {
+          var body = await fetchText(RELAYS[r].wrap(targets[t]));
+          var found = ID_IN_BODY.exec(body);
+          if (found) {
+            if (t > 0) preferredTarget = (preferredTarget + t) % targets.length;
+            return found[1];
+          }
+          answered = answered || UPSTREAM_ANSWERED.test(body);
+          log(RELAYS[r].name, 'answered without chatChannelId');
+        } catch (err) {
+          log(RELAYS[r].name, 'failed', err.message);
+          break; // 중계 자체가 죽었으면 다음 중계로
+        }
+      }
+      if (answered) return ''; // 치지직이 "그런 해시/채널 없음"이라고 확답했다. 다른 중계로 물어봐도 같다.
+    }
+    return '';
+  }
+
+  // 같은 PC 의 다른 위젯 인스턴스와 조회 결과를 공유하고, 중계가 죽었을 때 마지막 값을 쓰기 위한 캐시
+  var CACHE_KEY = 'chzzk-latex-chat:cid:' + (config.hash || config.channel);
+  function readCache() {
+    try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || null; } catch (e) { return null; }
+  }
+  function writeCache(cid) {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ cid: cid, at: Date.now() })); } catch (e) { /* 저장 불가 환경 */ }
+  }
+
+  var refreshing = false;
+  async function refreshChannel() {
+    if (refreshing) return; // 중계가 느려 이전 조회가 아직 안 끝났으면 건너뛴다
+    refreshing = true;
+    try {
+      await refreshChannelOnce();
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  async function refreshChannelOnce() {
+    var cached = readCache();
+    var fresh = cached && Date.now() - cached.at < POLL_INTERVAL_MS - 2000;
+    var cid = fresh ? cached.cid : await lookupChatChannelId();
+    if (cid && !fresh) writeCache(cid);
+    if (!cid && !currentCid && cached) cid = cached.cid; // 조회 실패: 마지막으로 알던 값이라도 쓴다
+
+    if (!cid) {
+      if (!currentCid) setStatus('채팅 채널을 찾지 못했습니다. URL 의 hash 값을 확인해 주세요. (자동으로 다시 시도합니다)');
+      return;
+    }
+    if (cid !== currentCid) {
+      log('chatChannelId', currentCid || '(none)', '->', cid);
+      currentCid = cid;
+      clearMessages();
+      chat.connect(cid);
+    }
+  }
+
+  // ---------------------------------------------------------------- 치지직 채팅 WebSocket
+  // 읽기 전용(auth: READ)은 액세스 토큰 없이 접속된다. 채팅 서버는 Origin 을 가리지 않는다.
+  var CHAT_SERVERS = ['kr-ss1', 'kr-ss2', 'kr-ss3', 'kr-ss4', 'kr-ss5'];
+  var CMD = { PING: 0, PONG: 10000, CONNECT: 100, CONNECTED: 10100, RECENT: 5101, RECENT_RESULT: 15101, CHAT: 93101, DONATION: 93102, BLIND: 94008 };
+  var RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
+
+  function ChzzkChat(handlers) {
+    this.handlers = handlers;
+    this.cid = '';
+    this.ws = null;
+    this.attempt = 0;
+    this.retryTimer = 0;
+    this.watchdog = 0;
+    this.lastRx = 0;
+    this.pinged = false;
+  }
+
+  ChzzkChat.prototype.connect = function (cid) {
+    this.close();
+    this.cid = cid;
+    this.attempt = 0;
+    this.open();
+  };
+
+  ChzzkChat.prototype.close = function () {
+    clearTimeout(this.retryTimer);
+    clearInterval(this.watchdog);
+    if (this.ws) {
+      this.ws.onopen = this.ws.onmessage = this.ws.onerror = this.ws.onclose = null;
+      try { this.ws.close(); } catch (e) { /* 이미 닫힘 */ }
+      this.ws = null;
+    }
+  };
+
+  ChzzkChat.prototype.serverUrl = function () {
+    // 공식 SDK 와 같은 방식(cid 문자 코드 합)으로 서버를 고르고, 실패할 때마다 다음 서버로 넘어간다.
+    var sum = 0;
+    for (var i = 0; i < this.cid.length; i++) sum += this.cid.charCodeAt(i);
+    return 'wss://' + CHAT_SERVERS[(sum + this.attempt) % CHAT_SERVERS.length] + '.chat.naver.com/chat';
+  };
+
+  ChzzkChat.prototype.send = function (payload) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(payload));
+  };
+
+  ChzzkChat.prototype.open = function () {
+    var self = this;
+    var cid = this.cid;
+    var ws = (this.ws = new WebSocket(this.serverUrl()));
+    this.lastRx = Date.now();
+    this.pinged = false;
+    log('connecting', ws.url);
+
+    ws.onopen = function () {
+      self.send({ ver: '3', cmd: CMD.CONNECT, svcid: 'game', cid: cid, tid: 1, bdy: { uid: null, devType: 2001, accTkn: null, auth: 'READ' } });
+    };
+    ws.onmessage = function (event) {
+      self.lastRx = Date.now();
+      self.pinged = false;
+      var data;
+      try { data = JSON.parse(event.data); } catch (e) { return; }
+      switch (data.cmd) {
+        case CMD.PING:
+          self.send({ ver: '3', cmd: CMD.PONG });
+          break;
+        case CMD.CONNECTED:
+          if (data.retCode !== 0) { log('connect rejected', data.retCode, data.retMsg); ws.close(); break; }
+          self.attempt = 0;
+          self.handlers.onState(true);
+          self.send({ ver: '3', cmd: CMD.RECENT, svcid: 'game', cid: cid, sid: data.bdy.sid, tid: 2, bdy: { recentMessageCount: 50 } });
+          break;
+        case CMD.RECENT_RESULT:
+          var list = ((data.bdy && data.bdy.messageList) || []).slice();
+          list.sort(function (a, b) { return a.messageTime - b.messageTime; });
+          self.handlers.onMessages(list);
+          break;
+        case CMD.CHAT:
+        case CMD.DONATION:
+          self.handlers.onMessages(data.bdy);
+          break;
+        case CMD.BLIND:
+          if (data.bdy && data.bdy.blindType !== 'CANCEL') self.handlers.onBlind(data.bdy.userId, data.bdy.messageTime);
+          break;
+      }
+    };
+    ws.onclose = ws.onerror = function () {
+      if (self.ws !== ws) return;
+      self.close();
+      self.handlers.onState(false);
+      var delay = RETRY_DELAYS_MS[Math.min(self.attempt, RETRY_DELAYS_MS.length - 1)];
+      self.attempt++;
+      log('disconnected, retry in', delay);
+      self.retryTimer = setTimeout(function () { self.open(); }, delay);
+    };
+
+    // 20초간 조용하면 ping, 그러고도 15초간 아무것도 안 오면 끊긴 것으로 보고 다시 붙는다.
+    this.watchdog = setInterval(function () {
+      var idle = Date.now() - self.lastRx;
+      if (idle > 35000) ws.close();
+      else if (idle > 20000 && !self.pinged) { self.pinged = true; self.send({ ver: '3', cmd: CMD.PING }); }
+    }, 5000);
+  };
+
+  var chat = new ChzzkChat({
+    onMessages: enqueue,
+    onBlind: removeMessage,
+    onState: function (connected) {
+      if (connected) setStatus('');
+      else setStatus('채팅 서버에 다시 연결하는 중…', 6000);
+    },
+  });
+
+  // ---------------------------------------------------------------- 데모
+  function startDemo() {
+    var P = 'https://ssl.pstatic.net/static/nng/glive/';
+    function user(id, nickname, extra) {
+      return Object.assign({ userIdHash: id, nickname: nickname, userRoleCode: 'common_user', verifiedMark: false, streamingProperty: {} }, extra || {});
+    }
+    var streamer = user('demo-s', '수학하는스트리머', {
+      userRoleCode: 'streamer', verifiedMark: true,
+      badge: { imageUrl: P + 'icon/streamer.png' }, title: { name: '스트리머', color: '#D9B04F' },
+    });
+    var manager = user('demo-m', '매니저', { userRoleCode: 'streaming_chat_manager', badge: { imageUrl: P + 'icon/manager.png' }, title: { name: '채팅 운영자', color: '#5C95C1' } });
+    var fan = user('demo-f', '치즈부자', {
+      activityBadges: [{ imageUrl: P + 'icon/cheese02.png', activated: true }],
+      streamingProperty: { nicknameColor: { colorCode: 'SG003' } },
+    });
+    var R = String.raw;
+    var script = [
+      [user('demo-1', '지나가던시청자'), '안녕하세요! 오늘은 뭐 푸나요?'],
+      [fan, R`오일러 공식 $e^{i\pi} + 1 = 0$ 은 언제 봐도 예쁨`],
+      [user('demo-2', '적분왕'), R`$$\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}$$`],
+      [streamer, R`근의 공식은 x = \frac{-b \pm \sqrt{b^2-4ac}}{2a} 입니다`],
+      [user('demo-3', '물리좋아'), R`속력=\frac{거리}{시간}임 ㅇㅇ`],
+      [user('demo-4', 'ㅋㅋㅋ봇'), R`가격은 $5 아니면 $10 임 ^^ T_T \o/ (이런 건 수식 아님)`],
+      [manager, R`\begin{pmatrix} a & b \\ c & d \end{pmatrix}^{-1} = \frac{1}{ad-bc}\begin{pmatrix} d & -b \\ -c & a \end{pmatrix}`],
+      [user('demo-5', '이모티콘러버'), R`치즈 {:cheese:} 좋아 {:cheese:}`, { emojis: { cheese: P + 'icon/cheese02.png' } }],
+      [user('demo-6', '후원자', { streamingProperty: { nicknameColor: { colorCode: 'CC011' } } }),
+        R`바젤 문제! $\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}$`, { payAmount: 1000, donationType: 'CHAT' }, 10],
+      [user('demo-7', '화학러'), R`\ce{2H2 + O2 -> 2H2O}`],
+      [user('demo-8', '맥스웰'), R`$$\nabla \times \mathbf{B} = \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t} + \text{아주 아주 긴 수식은 말풍선 너비에 맞게 줄어듭니다}$$`],
+      [user('demo-9', '오타쟁이'), R`$\frac{1}{2$ 문법이 틀리면 그냥 글자로 나옴`],
+    ];
+    var n = 0;
+    currentCid = 'demo';
+    (function next() {
+      var row = script[n % script.length];
+      var extras = Object.assign({ chatType: 'STREAMING', emojis: {} }, row[2] || {});
+      enqueue([{ uid: row[0].userIdHash, msgTime: Date.now() + n, msgTypeCode: row[3] || 1, msgStatusType: 'NORMAL',
+        msg: row[1], profile: JSON.stringify(row[0]), extras: JSON.stringify(extras) }]);
+      n++;
+      setTimeout(next, n < 4 ? 400 : 1800);
+    })();
+  }
+
+  // ---------------------------------------------------------------- 안내(설정) 화면
+  function startSetup() {
+    document.body.classList.add('is-setup');
+    chatEl.hidden = true;
+    document.getElementById('setup').hidden = false;
+
+    var src = document.getElementById('src-url');
+    var out = document.getElementById('out-url');
+    var hint = document.getElementById('src-hint');
+    var copy = document.getElementById('copy');
+    var base = location.href.split(/[?#]/)[0];
+    document.getElementById('demo-link').href = base + '?demo=1';
+
+    src.addEventListener('input', function () {
+      var hash = hex32(src.value);
+      out.value = hash ? base + '?hash=' + hash : '';
+      copy.disabled = !hash;
+      hint.className = 'hint' + (hash ? ' ok' : '');
+      hint.textContent = hash ? '위젯 해시 확인: ' + hash : src.value.trim() ? 'URL 에서 32자리 해시를 찾지 못했습니다.' : '';
+    });
+    copy.addEventListener('click', function () {
+      out.select();
+      var done = function () { copy.textContent = '복사됨!'; setTimeout(function () { copy.textContent = '복사'; }, 1500); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(out.value).then(done, function () { document.execCommand('copy'); done(); });
+      else { document.execCommand('copy'); done(); }
+    });
+  }
+
+  // ---------------------------------------------------------------- 시작
+  async function main() {
+    var hasSource = config.hash || config.channel || config.chatChannelId;
+    if (!config.demo && !hasSource) return startSetup();
+
+    if (config.detect !== 'off') {
+      var ok = await loadKatex();
+      if (!ok) log('KaTeX 를 불러오지 못했습니다. 수식 없이 채팅만 표시합니다.');
+      if (ok && document.fonts) {
+        // 수식 너비를 정확히 재려면 KaTeX 글꼴이 먼저 있어야 한다.
+        ['KaTeX_Main', 'KaTeX_Math', 'KaTeX_Size1', 'KaTeX_Size2', 'KaTeX_AMS'].forEach(function (f) { document.fonts.load('24px ' + f); });
+        document.fonts.addEventListener('loadingdone', refitAll);
+      }
+    }
+    window.addEventListener('resize', function () { refitAll(); flush(); });
+
+    if (config.demo) return startDemo();
+
+    if (config.chatChannelId) {
+      currentCid = config.chatChannelId;
+      chat.connect(currentCid);
+      return;
+    }
+    await refreshChannel();
+    setInterval(refreshChannel, POLL_INTERVAL_MS);
+  }
+
+  main();
+})();
+</script>
+</body>
+</html>
